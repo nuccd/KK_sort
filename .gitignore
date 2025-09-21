@@ -1,0 +1,10 @@
+.vscode/settings.json
+.test
+*.pyc
+*.png
+*.zip
+*.zipmod
+*.7z
+*.lnk
+*.txt
+*.log
