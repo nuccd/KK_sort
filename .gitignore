@@ -1,5 +1,4 @@
-.vscode/settings.json
-.test/
+test/*
 .test
 *.pyc
 *.png
