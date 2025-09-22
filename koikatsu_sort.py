@@ -3,11 +3,40 @@ import os
 import shutil
 import datetime
 import configparser
+import logging
 
 # --- 从 config.ini 读取配置 ---
 config = configparser.ConfigParser()
 config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.ini')
 config.read(config_path)
+
+# --- 初始化日志系统 ---
+try:
+    log_dir = config.get('Logging', 'log_dir', fallback='./logs')
+    log_filename_template = config.get('Logging', 'log_filename', fallback='koikatsu_log_{date}.log')
+    log_level_str = config.get('Logging', 'log_level', fallback='INFO').upper()
+    log_level = getattr(logging, log_level_str)
+
+    os.makedirs(log_dir, exist_ok=True)
+    today = datetime.date.today().strftime('%Y-%m-%d')
+    log_filename = log_filename_template.format(date=today)
+    log_path = os.path.join(log_dir, log_filename)
+
+    logging.basicConfig(
+        level=log_level,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_path, encoding='utf-8'),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+except (configparser.NoSectionError, configparser.NoOptionError):
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[logging.StreamHandler(sys.stdout)]
+    )
+    logging.warning("配置文件中未找到 [Logging] 部分或选项，使用默认日志设置。")
 
 # --- 配置部分 ---
 outfit_card_dir = config.get('Paths', 'outfit_card_dir')
@@ -40,7 +69,7 @@ def get_card_type(file_path):
             iend_index = file_content.find(iend_chunk_signature)
             
             if iend_index == -1:
-                return None  # 未找到 IEND 数据块，不是有效的PNG卡片
+                return None
             
             # 从完整的 IEND 签名块的末尾（8字节）开始，再跳过你发现的8字节
             start_index = iend_index + len(iend_chunk_signature) + 8
@@ -57,7 +86,7 @@ def get_card_type(file_path):
                 return 'outfit'
             
     except Exception as e:
-        print(f"警告：处理图片 '{os.path.basename(file_path)}' 时发生错误：{e}")
+        logging.warning(f"处理图片 '{os.path.basename(file_path)}' 时发生错误：{e}")
         return None
     
     return None
@@ -70,14 +99,14 @@ def process_file(source_path, destination_dir, operation_type, file_name, times)
     
     if operation_type == 'move':
         shutil.move(source_path, destination_path)
-        print(f"   -> 已将文件移动到：{destination_dir}")
+        logging.info(f"   -> 已将文件移动到：{destination_dir}")
     elif operation_type == 'copy':
         shutil.copy2(source_path, destination_path)
-        print(f"   -> 已将文件复制到：{destination_dir}")
+        logging.info(f"   -> 已将文件复制到：{destination_dir}")
     
     current_time = datetime.datetime.now().timestamp()
     os.utime(destination_path, (current_time, current_time))
-    print(f"   -> 已将文件修改日期更新为当前时间。")
+    logging.info(f"   -> 已将文件修改日期更新为当前时间。")
 
 def process_image(file_path, file_name, times):
     """
@@ -86,28 +115,28 @@ def process_image(file_path, file_name, times):
     card_type = get_card_type(file_path)
     
     if card_type == 'character':
-        print(f"{times}. '{file_name}' 是角色卡。")
+        logging.info(f"{times}. '{file_name}' 是角色卡。")
         process_file(file_path, character_card_dir, 'copy' if is_copy else 'move', file_name, times)
     elif card_type == 'outfit':
-        print(f"{times}. '{file_name}' 是服装卡。")
+        logging.info(f"{times}. '{file_name}' 是服装卡。")
         process_file(file_path, outfit_card_dir, 'copy' if is_copy else 'move', file_name, times)
     else:
-        print(f"{times}. '{file_name}' 不是有效的角色卡或服装卡，未处理。")
+        logging.warning(f"{times}. '{file_name}' 不是有效的角色卡或服装卡，未处理。")
         return
 
 def process_zipmod(file_path, file_name, times):
     """
     处理 zipmod 文件。
     """
-    print(f"{times}. '{file_name}' 是 zipmod 文件。")
+    logging.info(f"{times}. '{file_name}' 是 zipmod 文件。")
     process_file(file_path, zipmod_target_dir, 'move', file_name, times)
     
 
 # --- 主程序逻辑 ---
 
 def main():
-    # 调试模式: 在这里设置你要测试的特定文件路径
-    # 如果 sys.argv 只有一个元素（脚本本身），则使用下面的列表
+    # 调试模式: 在这里设置你要测试的特定文件路径 
+    # 如果 sys.argv 只有一个元素（脚本本身），则使用下面的列表 
     # 你可以添加多个文件路径到这个列表中
     files_to_process = [
         r'E:\Koikatu\_shortcut\kk_sort\test\chara.png',
@@ -120,14 +149,14 @@ def main():
         file_paths = sys.argv[1:]
     else:
         file_paths = files_to_process
-        print("以调试模式运行...")
+        logging.info("以调试模式运行...")
 
-    print(f"正在处理 {len(file_paths)} 个文件...")
+    logging.info(f"正在处理 {len(file_paths)} 个文件...")
     
     times = 0
     for file_path in file_paths:
         if not os.path.isfile(file_path):
-            print(f"警告：'{file_path}' 不是一个有效的文件，跳过。")
+            logging.warning(f"警告：'{file_path}' 不是一个有效的文件，跳过。")
             continue
         
         times += 1
@@ -142,11 +171,11 @@ def main():
                 process_zipmod(file_path, file_name, times)
             
             else:
-                print(f"{times}. '{file_name}' 是未知文件类型 '{file_extension}'，未移动。")
+                logging.warning(f"{times}. '{file_name}' 是未知文件类型 '{file_extension}'，未移动。")
                 
         except Exception as e:
-            print(f"处理文件 '{file_name}' 时发生错误：{e}")
+            logging.error(f"处理文件 '{file_name}' 时发生错误：{e}")
 
 if __name__ == "__main__":
-    main()    
+    main()
     input("按任意键退出......")
