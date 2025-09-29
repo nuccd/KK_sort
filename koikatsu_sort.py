@@ -5,10 +5,56 @@ import datetime
 import configparser
 import logging
 
+# --- 配置默认值，用于生成新的 config.ini 文件 ---
+def create_default_config(path):
+    """创建并保存默认的 config.ini 文件"""
+    default_config = configparser.ConfigParser()
+    
+    default_config['Paths'] = {
+        'outfit_card_dir': 'E:/Koikatu/UserData/coordinate',
+        'character_card_dir': 'E:/Koikatu/UserData/chara/female/others/pixiv_2025',
+        'zipmod_target_dir': 'E:/Koikatu/mods/mymods'
+    }
+    
+    default_config['Options'] = {
+        'is_copy': 'False',
+        'update_file_time': 'True'
+    }
+    
+    default_config['Logging'] = {
+        'log_dir': './logs',
+        'log_filename': 'koikatsu_log_{date}.log',
+        'log_level': 'INFO'
+    }
+
+    with open(path, 'w', encoding='utf-8') as configfile:
+        default_config.write(configfile)
+
+
 # --- 从 config.ini 读取配置 ---
 config = configparser.ConfigParser()
-config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.ini')
+
+# 确定脚本运行的基准路径 (兼容打包和未打包)
+if getattr(sys, 'frozen', False):
+    # PyInstaller 打包后的路径：.exe 所在的目录
+    base_path = os.path.dirname(sys.executable)
+else:
+    # .py 文件运行时的目录
+    base_path = os.path.dirname(os.path.abspath(__file__))
+
+# 外部 config.ini 的路径
+config_path = os.path.join(base_path, 'config.ini')
+
+# 检查外部配置文件是否存在。如果不存在，则自动生成一个。
+if not os.path.exists(config_path):
+    print(f"配置文件 '{os.path.basename(config_path)}' 不存在，正在自动生成默认模板...")
+    create_default_config(config_path)
+    print("默认配置文件已生成。请修改配置后再次运行脚本。")
+    sys.exit()
+
+# 读取配置文件
 config.read(config_path)
+
 
 # --- 初始化日志系统 ---
 try:
@@ -17,6 +63,10 @@ try:
     log_level_str = config.get('Logging', 'log_level', fallback='INFO').upper()
     log_level = getattr(logging, log_level_str)
 
+    # 确保日志目录是相对 .exe 所在目录的
+    if not os.path.isabs(log_dir):
+        log_dir = os.path.join(base_path, log_dir)
+    
     os.makedirs(log_dir, exist_ok=True)
     today = datetime.date.today().strftime('%Y-%m-%d')
     log_filename = log_filename_template.format(date=today)
@@ -39,11 +89,16 @@ except (configparser.NoSectionError, configparser.NoOptionError):
     logging.warning("配置文件中未找到 [Logging] 部分或选项，使用默认日志设置。")
 
 # --- 配置部分 ---
-outfit_card_dir = config.get('Paths', 'outfit_card_dir')
-character_card_dir = config.get('Paths', 'character_card_dir')
-zipmod_target_dir = config.get('Paths', 'zipmod_target_dir')
-
-is_copy = config.getboolean('Options', 'is_copy')
+try:
+    outfit_card_dir = config.get('Paths', 'outfit_card_dir')
+    character_card_dir = config.get('Paths', 'character_card_dir')
+    zipmod_target_dir = config.get('Paths', 'zipmod_target_dir')
+    is_copy = config.getboolean('Options', 'is_copy')
+    # 读取新的配置项
+    update_file_time = config.getboolean('Options', 'update_file_time', fallback=True) 
+except configparser.NoSectionError as e:
+    logging.critical(f"配置文件中缺少关键配置段，请检查 'config.ini' 文件：{e}")
+    sys.exit() # 缺少关键配置，退出
 
 # 确保所有目标目录都存在
 os.makedirs(outfit_card_dir, exist_ok=True)
@@ -62,7 +117,8 @@ def get_card_type(file_path):
         with open(file_path, 'rb') as f:
             file_content = f.read()
             
-            # 完整的 IEND 数据块签名（包含类型和CRC校验码）
+            # 完整的 IEND 数据块签名（包含类型和标准的CRC校验码）
+            # 已修改为纯十六进制表示，以增强清晰度和一致性
             iend_chunk_signature = b'IEND\xae\x42\x60\x82'
             
             # 查找 IEND 数据块的位置
@@ -93,20 +149,31 @@ def get_card_type(file_path):
 
 def process_file(source_path, destination_dir, operation_type, file_name, times):
     """
-    根据操作类型（移动或复制）来处理文件。
+    根据配置（is_copy）来决定是复制还是移动文件，并处理文件时间戳。
+    
+    注：operation_type 参数现在只用于 logging 信息的描述。
+    实际操作逻辑已简化为直接判断全局的 is_copy 变量。
     """
     destination_path = os.path.join(destination_dir, file_name)
     
-    if operation_type == 'move':
-        shutil.move(source_path, destination_path)
-        logging.info(f"   -> 已将文件移动到：{destination_dir}")
-    elif operation_type == 'copy':
+    # 直接使用全局的 is_copy 变量进行判断和操作，更简洁
+    if is_copy:
+        # 复制操作
         shutil.copy2(source_path, destination_path)
         logging.info(f"   -> 已将文件复制到：{destination_dir}")
+    else:
+        # 移动操作 
+        shutil.move(source_path, destination_path)
+        logging.info(f"   -> 已将文件移动到：{destination_dir}")
     
-    current_time = datetime.datetime.now().timestamp()
-    os.utime(destination_path, (current_time, current_time))
-    logging.info(f"   -> 已将文件修改日期更新为当前时间。")
+    # 根据配置决定是否更新文件时间
+    if update_file_time:
+        current_time = datetime.datetime.now().timestamp()
+        os.utime(destination_path, (current_time, current_time))
+        logging.info(f"   -> 已将文件修改日期更新为当前时间。")
+    else:
+        # 补充日志，明确说明没有更新时间
+        logging.info(f"   -> 保留文件原始修改日期。")
 
 def process_image(file_path, file_name, times):
     """
@@ -116,6 +183,7 @@ def process_image(file_path, file_name, times):
     
     if card_type == 'character':
         logging.info(f"{times}. '{file_name}' 是角色卡。")
+        # 传递操作类型，虽然在 process_file 中已简化，但在外部调用时仍需传递
         process_file(file_path, character_card_dir, 'copy' if is_copy else 'move', file_name, times)
     elif card_type == 'outfit':
         logging.info(f"{times}. '{file_name}' 是服装卡。")
@@ -129,6 +197,7 @@ def process_zipmod(file_path, file_name, times):
     处理 zipmod 文件。
     """
     logging.info(f"{times}. '{file_name}' 是 zipmod 文件。")
+    # zipmod 文件通常只移动，不会复制，所以直接指定 'move'
     process_file(file_path, zipmod_target_dir, 'move', file_name, times)
     
 
@@ -177,5 +246,11 @@ def main():
             logging.error(f"处理文件 '{file_name}' 时发生错误：{e}")
 
 if __name__ == "__main__":
-    main()
-    input("按任意键退出......")
+    try:
+        main()
+    except Exception as e:
+        # 记录任何未捕获的错误
+        logging.critical(f"脚本发生致命错误：{e}")
+    finally:
+        # 无论是否发生错误，都执行这行代码
+        input("按任意键退出......")

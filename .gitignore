@@ -1,4 +1,6 @@
 test/*
+build/*
+dist/*
 *.pyc
 *.png
 *.zip
@@ -7,3 +9,5 @@ test/*
 *.lnk
 *.txt
 *.log
+*.exe
+*.bat
