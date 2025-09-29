@@ -13,6 +13,7 @@ def create_default_config(path):
     default_config['Paths'] = {
         'outfit_card_dir': 'E:/Koikatu/UserData/coordinate',
         'character_card_dir': 'E:/Koikatu/UserData/chara/female/others/pixiv_2025',
+        'scene_card_dir': 'E:/Koikatu/UserData/studio/scene',
         'zipmod_target_dir': 'E:/Koikatu/mods/mymods'
     }
     
@@ -23,7 +24,7 @@ def create_default_config(path):
     
     default_config['Logging'] = {
         'log_dir': './logs',
-        'log_filename': 'koikatsu_log_{date}.log',
+        'log_filename': 'koikatsu_sort_log_{date}.log',
         'log_level': 'INFO'
     }
 
@@ -50,6 +51,7 @@ if not os.path.exists(config_path):
     print(f"配置文件 '{os.path.basename(config_path)}' 不存在，正在自动生成默认模板...")
     create_default_config(config_path)
     print("默认配置文件已生成。请修改配置后再次运行脚本。")
+    input("按任意键退出......")
     sys.exit()
 
 # 读取配置文件
@@ -59,7 +61,8 @@ config.read(config_path)
 # --- 初始化日志系统 ---
 try:
     log_dir = config.get('Logging', 'log_dir', fallback='./logs')
-    log_filename_template = config.get('Logging', 'log_filename', fallback='koikatsu_log_{date}.log')
+    # 修正：确保默认 fallback 也是你要求的 sort log
+    log_filename_template = config.get('Logging', 'log_filename', fallback='koikatsu_sort_log_{date}.log') 
     log_level_str = config.get('Logging', 'log_level', fallback='INFO').upper()
     log_level = getattr(logging, log_level_str)
 
@@ -92,17 +95,19 @@ except (configparser.NoSectionError, configparser.NoOptionError):
 try:
     outfit_card_dir = config.get('Paths', 'outfit_card_dir')
     character_card_dir = config.get('Paths', 'character_card_dir')
+    scene_card_dir = config.get('Paths', 'scene_card_dir')
     zipmod_target_dir = config.get('Paths', 'zipmod_target_dir')
     is_copy = config.getboolean('Options', 'is_copy')
-    # 读取新的配置项
     update_file_time = config.getboolean('Options', 'update_file_time', fallback=True) 
 except configparser.NoSectionError as e:
     logging.critical(f"配置文件中缺少关键配置段，请检查 'config.ini' 文件：{e}")
-    sys.exit() # 缺少关键配置，退出
+    input("按任意键退出......")
+    sys.exit()
 
 # 确保所有目标目录都存在
 os.makedirs(outfit_card_dir, exist_ok=True)
 os.makedirs(character_card_dir, exist_ok=True)
+os.makedirs(scene_card_dir, exist_ok=True) 
 os.makedirs(zipmod_target_dir, exist_ok=True)
 
 
@@ -111,14 +116,13 @@ os.makedirs(zipmod_target_dir, exist_ok=True)
 def get_card_type(file_path):
     """
     通过检查PNG文件的二进制签名来判断卡片类型。
-    返回 'character', 'outfit', 或 None。
+    返回 'character', 'outfit', 'scene', 或 None。
     """
     try:
         with open(file_path, 'rb') as f:
             file_content = f.read()
             
-            # 完整的 IEND 数据块签名（包含类型和标准的CRC校验码）
-            # 已修改为纯十六进制表示，以增强清晰度和一致性
+            # PNG 文件结束块的签名
             iend_chunk_signature = b'IEND\xae\x42\x60\x82'
             
             # 查找 IEND 数据块的位置
@@ -127,19 +131,26 @@ def get_card_type(file_path):
             if iend_index == -1:
                 return None
             
-            # 从完整的 IEND 签名块的末尾（8字节）开始，再跳过你发现的8字节
+            # 从 IEND 块之后开始读取卡片数据签名
             start_index = iend_index + len(iend_chunk_signature) + 8
             
+            slice_length = 14
+            
             # 检查文件大小是否足以包含签名
-            if len(file_content) < start_index + 14:
+            if len(file_content) < start_index + slice_length:
                 return None
             
-            data_signature = file_content[start_index : start_index + 14]
+            data_signature = file_content[start_index : start_index + slice_length]
             
+            # 1. 判断角色卡 (优先级最高)
             if data_signature.startswith(b'KoiKatuChara'):
                 return 'character'
+            # 2. 判断服装卡 (优先级次之)
             elif data_signature.startswith(b'KoiKatuClothes'):
                 return 'outfit'
+            # 3. 最后判断场景卡 (如果前两者都不是，且包含场景卡特征)
+            elif b'RendererPropertyList' in file_content: 
+                return 'scene'
             
     except Exception as e:
         logging.warning(f"处理图片 '{os.path.basename(file_path)}' 时发生错误：{e}")
@@ -147,16 +158,13 @@ def get_card_type(file_path):
     
     return None
 
-def process_file(source_path, destination_dir, operation_type, file_name, times):
+def process_file(source_path, destination_dir, file_name, times):
     """
-    根据配置（is_copy）来决定是复制还是移动文件，并处理文件时间戳。
-    
-    注：operation_type 参数现在只用于 logging 信息的描述。
-    实际操作逻辑已简化为直接判断全局的 is_copy 变量。
+    根据配置is_copy来决定是复制还是移动文件，并处理文件时间戳。
     """
     destination_path = os.path.join(destination_dir, file_name)
     
-    # 直接使用全局的 is_copy 变量进行判断和操作，更简洁
+    # 直接使用全局的 is_copy 变量进行判断和操作
     if is_copy:
         # 复制操作
         shutil.copy2(source_path, destination_path)
@@ -183,22 +191,24 @@ def process_image(file_path, file_name, times):
     
     if card_type == 'character':
         logging.info(f"{times}. '{file_name}' 是角色卡。")
-        # 传递操作类型，虽然在 process_file 中已简化，但在外部调用时仍需传递
-        process_file(file_path, character_card_dir, 'copy' if is_copy else 'move', file_name, times)
+        process_file(file_path, character_card_dir, file_name, times)
     elif card_type == 'outfit':
         logging.info(f"{times}. '{file_name}' 是服装卡。")
-        process_file(file_path, outfit_card_dir, 'copy' if is_copy else 'move', file_name, times)
+        process_file(file_path, outfit_card_dir, file_name, times)
+    elif card_type == 'scene':
+        logging.info(f"{times}. '{file_name}' 是场景卡。")
+        process_file(file_path, scene_card_dir, file_name, times)
     else:
-        logging.warning(f"{times}. '{file_name}' 不是有效的角色卡或服装卡，未处理。")
+        logging.warning(f"{times}. '{file_name}' 不是有效的恋活卡片，未处理。")
         return
 
 def process_zipmod(file_path, file_name, times):
     """
-    处理 zipmod 文件。
+    处理 zipmod 文件。它会遵从全局 is_copy 设置。
     """
     logging.info(f"{times}. '{file_name}' 是 zipmod 文件。")
-    # zipmod 文件通常只移动，不会复制，所以直接指定 'move'
-    process_file(file_path, zipmod_target_dir, 'move', file_name, times)
+    # 调用 process_file，它会根据 is_copy 配置决定复制还是移动
+    process_file(file_path, zipmod_target_dir, file_name, times)
     
 
 # --- 主程序逻辑 ---
@@ -210,6 +220,7 @@ def main():
     files_to_process = [
         r'E:\Koikatu\_shortcut\kk_sort\test\chara.png',
         r'E:\Koikatu\_shortcut\kk_sort\test\outfit.png',
+        r'E:\Koikatu\_shortcut\kk_sort\test\scene.png', 
         r'E:\Koikatu\_shortcut\kk_sort\test\mods.zipmod',
     ]
 
@@ -219,6 +230,7 @@ def main():
     else:
         file_paths = files_to_process
         logging.info("以调试模式运行...")
+        is_copy = True
 
     logging.info(f"正在处理 {len(file_paths)} 个文件...")
     
