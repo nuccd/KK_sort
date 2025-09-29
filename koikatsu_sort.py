@@ -70,7 +70,8 @@ try:
     if not os.path.isabs(log_dir):
         log_dir = os.path.join(base_path, log_dir)
     
-    os.makedirs(log_dir, exist_ok=True)
+    # 日志目录仍然自动创建，因为日志本身不需要用户事先创建
+    os.makedirs(log_dir, exist_ok=True) 
     today = datetime.date.today().strftime('%Y-%m-%d')
     log_filename = log_filename_template.format(date=today)
     log_path = os.path.join(log_dir, log_filename)
@@ -91,7 +92,7 @@ except (configparser.NoSectionError, configparser.NoOptionError):
     )
     logging.warning("配置文件中未找到 [Logging] 部分或选项，使用默认日志设置。")
 
-# --- 配置部分 ---
+# --- 配置读取与路径检查 ---
 try:
     outfit_card_dir = config.get('Paths', 'outfit_card_dir')
     character_card_dir = config.get('Paths', 'character_card_dir')
@@ -104,12 +105,27 @@ except configparser.NoSectionError as e:
     input("按任意键退出......")
     sys.exit()
 
-# 确保所有目标目录都存在
-os.makedirs(outfit_card_dir, exist_ok=True)
-os.makedirs(character_card_dir, exist_ok=True)
-os.makedirs(scene_card_dir, exist_ok=True) 
-os.makedirs(zipmod_target_dir, exist_ok=True)
+# --- 核心路径存在性检查 ---
+# 新增的路径检查逻辑，不再自动创建目录
+missing_paths = []
+path_configs = {
+    'outfit_card_dir': outfit_card_dir,
+    'character_card_dir': character_card_dir,
+    'scene_card_dir': scene_card_dir,
+    'zipmod_target_dir': zipmod_target_dir
+}
 
+for config_name, path in path_configs.items():
+    if not os.path.isdir(path):
+        missing_paths.append((config_name, path))
+
+if missing_paths:
+    logging.critical("检测到目标路径不存在。请在 'config.ini' 中创建或修正以下路径：")
+    for config_name, path in missing_paths:
+        logging.critical(f"  - [{config_name}] 路径 '{path}' 不存在。")
+    input("按任意键退出......")
+    sys.exit()
+    
 
 # --- 功能方法部分 ---
 
@@ -224,38 +240,54 @@ def main():
         r'E:\Koikatu\_shortcut\kk_sort\test\mods.zipmod',
     ]
 
-    # 根据是否有拖放文件来决定使用哪种模式，创建一个新的列表，包含从 sys.argv 的第二个元素（索引为 1）开始，一直到列表末尾的所有元素。
+    # 根据是否有拖放文件来决定使用哪种模式
     if len(sys.argv) > 1:
         file_paths = sys.argv[1:]
+        logging.info("以拖放模式运行...")
+        
+        times = 0
+        for file_path in file_paths:
+            if not os.path.isfile(file_path):
+                logging.warning(f"警告：'{file_path}' 不是一个有效的文件，跳过。")
+                continue
+            
+            times += 1
+            file_name = os.path.basename(file_path)
+            file_extension = os.path.splitext(file_name)[1].lower()
+            
+            try:
+                if file_extension == '.png':
+                    process_image(file_path, file_name, times)
+                
+                elif file_extension == '.zipmod':
+                    process_zipmod(file_path, file_name, times)
+                
+                else:
+                    logging.warning(f"{times}. '{file_name}' 是未知文件类型 '{file_extension}'，未移动。")
+                    
+            except Exception as e:
+                logging.error(f"处理文件 '{file_name}' 时发生错误：{e}")
+
     else:
+        # --- 独立功能测试块：只测试卡片类型判断 ---
+        logging.info("--- 开始独立功能测试：卡片类型判断 (调试模式) ---")
         file_paths = files_to_process
-        logging.info("以调试模式运行...")
-        is_copy = True
+        
+        for i, file_path in enumerate(file_paths, 1):
+            file_name = os.path.basename(file_path)
+            
+            if os.path.isfile(file_path) and os.path.splitext(file_path)[1].lower() == '.png':
+                card_type = get_card_type(file_path)
+                print(f"[{i}. 类型测试] 文件: {file_name} -> 识别类型: {card_type}")
+            elif os.path.splitext(file_path)[1].lower() == '.zipmod':
+                print(f"[{i}. 类型测试] 文件: {file_name} -> 识别类型: zipmod (根据扩展名)")
+            else:
+                 print(f"[{i}. 类型测试] 文件: {file_name} -> 识别类型: 其它文件")
+                 
+        logging.info("--- 独立功能测试结束，已跳过文件移动/复制 ---")
+        return # 调试测试完成后退出 main 函数
 
     logging.info(f"正在处理 {len(file_paths)} 个文件...")
-    
-    times = 0
-    for file_path in file_paths:
-        if not os.path.isfile(file_path):
-            logging.warning(f"警告：'{file_path}' 不是一个有效的文件，跳过。")
-            continue
-        
-        times += 1
-        file_name = os.path.basename(file_path)
-        file_extension = os.path.splitext(file_name)[1].lower()
-        
-        try:
-            if file_extension == '.png':
-                process_image(file_path, file_name, times)
-            
-            elif file_extension == '.zipmod':
-                process_zipmod(file_path, file_name, times)
-            
-            else:
-                logging.warning(f"{times}. '{file_name}' 是未知文件类型 '{file_extension}'，未移动。")
-                
-        except Exception as e:
-            logging.error(f"处理文件 '{file_name}' 时发生错误：{e}")
 
 if __name__ == "__main__":
     try:
